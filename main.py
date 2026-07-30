@@ -7,12 +7,12 @@ import requests
 # 1. 페이지 기본 설정 및 헤더
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="전국 시군구 고령화 지도",
-    layout="wide"       # ⭕ layout 으로 변경
+    page_title="전국 시군구 인구 변동률 지도",
+    layout="wide"
 )
 
-st.title("🗺️ 전국 시군구 고령화율 지도")
-st.caption("행정안전부 주민등록 인구 데이터를 기반으로 한 시군구별 65세 이상 인구 비율 지도입니다.")
+st.title("📈 전국 시군구 인구 변동률 지도")
+st.caption("2015년 대비 최신 연도의 시군구별 총인구 증감률(%) 시각화 지도입니다.")
 
 # 데이터 URL 정의
 POPULATION_URL = "https://raw.githubusercontent.com/greatsong/modudata/main/data/population_yearly.csv.gz"
@@ -28,91 +28,103 @@ def load_geojson():
     return response.json()
 
 @st.cache_data
-def load_and_process_data():
-    """인구 CSV 데이터를 읽어와 최신 연도 기준 시군구별 고령화율 계산하기"""
-    # '코드' 열은 문자열(str)로 읽어야 앞자리 '0'이 유지되고 5자리 잘라내기가 가능합니다.
+def load_and_process_change_data():
+    """2015년 대비 최신 연도의 시군구별 인구 변동률 계산하기"""
+    # '코드' 열은 문자열(str)로 읽어 앞자리 '0' 유지 및 5자리 절삭 가능하도록 처리
     df = pd.read_csv(POPULATION_URL, dtype={'코드': str})
     
-    # 1) 가장 최신 연도 데이터만 필터링
-    latest_year = df['연도'].max()
-    df_latest = df[df['연도'] == latest_year].copy()
+    # 1) 가장 빠른 연도(2015년)와 가장 최신 연도 자동 도출
+    min_year = df['연도'].min()
+    max_year = df['연도'].max()
     
     # 2) 행정동 코드(10자리)의 앞 5자리를 추출하여 시군구 코드 생성
-    df_latest['sigungu_code'] = df_latest['코드'].str[:5]
+    df['sigungu_code'] = df['코드'].str[:5]
     
-    # 3) 65세 이상 연령대 열('계_65세' ~ '계_100세 이상') 찾기
-    age_cols = [c for c in df_latest.columns if c.startswith('계_')]
+    # 3) 전체 인구 계산을 위해 '계_'로 시작하는 모든 연령열 합산
+    total_cols = [c for c in df.columns if c.startswith('계_')]
+    df['총인구'] = df[total_cols].sum(axis=1)
     
-    # 연령 숫자를 추출하여 65세 이상인 열만 필터링
-    senior_cols = []
-    for col in age_cols:
-        age_str = col.replace('계_', '').replace('세 이상', '').replace('세', '')
-        try:
-            if int(age_str) >= 65:
-                senior_cols.append(col)
-        except ValueError:
-            continue
-            
-    # 전체 인구 계산에 필요한 모든 '계_' 열
-    total_cols = senior_cols + [c for c in age_cols if c not in senior_cols]
-
-    # 4) 시군구 단위로 총인구 및 65세 이상 인구 합산
-    df_latest['총인구'] = df_latest[total_cols].sum(axis=1)
-    df_latest['65세이상인구'] = df_latest[senior_cols].sum(axis=1)
+    # 4) 기준 연도(2015)와 최신 연도만 추출 후 시군구별 총인구 집계
+    df_filtered = df[df['연도'].isin([min_year, max_year])].copy()
     
-    grouped = df_latest.groupby(['sigungu_code', '시도', '시군구'], as_index=False).agg({
-        '총인구': 'sum',
-        '65세이상인구': 'sum'
-    })
+    grouped = df_filtered.groupby(['sigungu_code', '시도', '시군구', '연도'], as_index=False)['총인구'].sum()
     
-    # 5) 고령화율(%) 계산
-    grouped['고령화율'] = (grouped['65세이상인구'] / grouped['총인구']) * 100
-    grouped['고령화율'] = grouped['고령화율'].round(1) # 소수점 첫째자리까지 정렬
+    # 5) 연도별 열로 피벗 (2015년 인구, 최신년도 인구)
+    pivoted = grouped.pivot(
+        index=['sigungu_code', '시도', '시군구'], 
+        columns='연도', 
+        values='총인구'
+    ).reset_index()
     
-    # 6) 지정된 경계값(19%, 23%, 28%, 38%) 기준으로 5단계 구획 채우기
-    # 범례 및 정렬을 위해 범주형 라벨 부여
-    bins = [-1, 19, 23, 28, 38, 100]
-    labels = ['19% 미만', '19% 이상 ~ 23% 미만', '23% 이상 ~ 28% 미만', '28% 이상 ~ 38% 미만', '38% 이상']
+    # 컬럼 이름 정제
+    pivoted.columns.name = None
+    pivoted = pivoted.rename(columns={min_year: '인구_2015', max_year: '인구_최신'})
     
-    grouped['고령화단계'] = pd.cut(grouped['고령화율'], bins=bins, labels=labels)
+    # 결측치 처리 (새로 생긴 시군구 등)
+    pivoted = pivoted.dropna(subset=['인구_2015', '인구_최신'])
     
-    return grouped, latest_year
+    # 6) 인구 증감률(%) 및 증감 수(명) 계산
+    pivoted['인구증감'] = pivoted['인구_최신'] - pivoted['인구_2015']
+    pivoted['변동률'] = ((pivoted['인구_최신'] - pivoted['인구_2015']) / pivoted['인구_2015']) * 100
+    pivoted['변동률'] = pivoted['변동률'].round(1)
+    
+    # 7) 변동률 5단계 구획 설정 (-15% 이하, -15%~-5%, -5%~+5%, +5%~+15%, +15% 이상)
+    bins = [-999, -15, -5, 5, 15, 999]
+    labels = [
+        '-15% 미만 (급감)', 
+        '-15% 이상 ~ -5% 미만 (감소)', 
+        '-5% 이상 ~ +5% 미만 (유지)', 
+        '+5% 이상 ~ +15% 미만 (증가)', 
+        '+15% 이상 (급증)'
+    ]
+    pivoted['변동단계'] = pd.cut(pivoted['변동률'], bins=bins, labels=labels)
+    
+    return pivoted, min_year, max_year
 
 # 데이터 로딩 실행
-with st.spinner("데이터를 불러오는 중입니다..."):
+with st.spinner("데이터를 분석 중입니다..."):
     geojson_data = load_geojson()
-    df_sigungu, max_year = load_and_process_data()
+    df_sigungu, min_year, max_year = load_and_process_change_data()
 
-st.sidebar.markdown(f"**기준 연도:** {max_year}년")
+# 사이드바 안내
+st.sidebar.markdown(f"**비교 기간:** {min_year}년 ➡️ {max_year}년")
 st.sidebar.info(
-    "**고령화율 단계 구분 기준**\n\n"
-    "- 1단계: 19% 미만\n"
-    "- 2단계: 19% ~ 23%\n"
-    "- 3단계: 23% ~ 28%\n"
-    "- 4단계: 28% ~ 38%\n"
-    "- 5단계: 38% 이상"
+    "**인구 변동률 단계 구분 기준**\n\n"
+    "- 🔴 **-15% 미만**: 인구 급감 지역\n"
+    "- 🟠 **-15% ~ -5%**: 인구 감소 지역\n"
+    "- ⚪ **-5% ~ +5%**: 인구 보합/유지 지역\n"
+    "- 🔵 **+5% ~ +15%**: 인구 증가 지역\n"
+    "- 🔷 **+15% 이상**: 인구 급증 지역"
 )
 
 # -----------------------------------------------------------------------------
 # 3. 단계구분도(Choropleth Map) 생성 및 시각화
 # -----------------------------------------------------------------------------
-# 단계별 색상 지정 (연한 빨간색/주황색 -> 진한 버건디 계열)
+# 감소는 주황/붉은색, 유지는 회색, 증가/급증은 푸른색 계열
 color_discrete_map = {
-    '19% 미만': '#fef0d9',
-    '19% 이상 ~ 23% 미만': '#fdcc8a',
-    '23% 이상 ~ 28% 미만': '#fc8d59',
-    '28% 이상 ~ 38% 미만': '#e34a33',
-    '38% 이상': '#b30000'
+    '-15% 미만 (급감)': '#d73027',
+    '-15% 이상 ~ -5% 미만 (감소)': '#fc8d59',
+    '-5% 이상 ~ +5% 미만 (유지)': '#e0e0e0',
+    '+5% 이상 ~ +15% 미만 (증가)': '#67a9cf',
+    '+15% 이상 (급증)': '#02818a'
 }
+
+category_order = [
+    '-15% 미만 (급감)', 
+    '-15% 이상 ~ -5% 미만 (감소)', 
+    '-5% 이상 ~ +5% 미만 (유지)', 
+    '+5% 이상 ~ +15% 미만 (증가)', 
+    '+15% 이상 (급증)'
+]
 
 fig = px.choropleth_mapbox(
     df_sigungu,
     geojson=geojson_data,
     locations='sigungu_code',         # 데이터의 시군구 코드
     featureidkey='properties.코드',   # GeoJSON 속성의 5자리 코드
-    color='고령화단계',               # 색상 구분 기준
+    color='변동단계',                 # 색상 구분 기준
     color_discrete_map=color_discrete_map,
-    category_orders={'고령화단계': ['19% 미만', '19% 이상 ~ 23% 미만', '23% 이상 ~ 28% 미만', '28% 이상 ~ 38% 미만', '38% 이상']},
+    category_orders={'변동단계': category_order},
     center={"lat": 35.9, "lon": 127.8}, # 대한민국 중심 좌표
     zoom=6.2,
     mapbox_style="white-bg",          # 배경 지도 타일 없이 경계선만 표시
@@ -120,28 +132,34 @@ fig = px.choropleth_mapbox(
     hover_data={
         '시도': True,
         'sigungu_code': False,
-        '고령화단계': False,
-        '고령화율': ':.1f%'            # 소수점 1자리 + % 표기
+        '변동단계': False,
+        '인구_2015': ':,명',
+        '인구_최신': ':,명',
+        '인구증감': ':,명',
+        '변동률': ':.1f%'              # 소수점 1자리 + % 표기
     },
     labels={
-        '고령화단계': '고령화율 구간',
+        '변동단계': '인구 변동 구간',
         '시도': '시·도',
-        '고령화율': '고령화율'
+        '인구_2015': f'{min_year}년 인구',
+        '인구_최신': f'{max_year}년 인구',
+        '인구증감': '인구 증감수',
+        '변동률': '변동률'
     }
 )
 
-# 레이아웃 디테일 설정 (경계선 및 가독성 조정)
+# 레이아웃 디테일 설정
 fig.update_traces(marker_line_width=0.5, marker_line_color="#666666")
 fig.update_layout(
     margin={"r": 0, "t": 10, "l": 0, "b": 10},
     height=650,
     legend=dict(
-        title_text="고령화율 구간",
+        title_text=f"인구 변동률 구간 ({min_year} 대비)",
         yanchor="top",
         y=0.98,
         xanchor="left",
         x=0.01,
-        bgcolor="rgba(255, 255, 255, 0.8)"
+        bgcolor="rgba(255, 255, 255, 0.85)"
     )
 )
 
@@ -152,42 +170,44 @@ st.markdown("---")
 # -----------------------------------------------------------------------------
 # 4. 지도 하단 상위/하위 10개 지역 표 표시
 # -----------------------------------------------------------------------------
-st.subheader("📊 고령화율 극단 지역 비교")
+st.subheader("📊 인구 변동률 극단 지역 비교")
 
 col1, col2 = st.columns(2)
 
-# 고령화율 높은 순 상위 10개
+# 변동률 높은 순 상위 10개 (인구 증가 지역)
 top10 = (
-    df_sigungu.sort_values(by='고령화율', ascending=False)
-    .head(10)[['시도', '시군구', '총인구', '65세이상인구', '고령화율']]
+    df_sigungu.sort_values(by='변동률', ascending=False)
+    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
     .reset_index(drop=True)
 )
 
-# 고령화율 낮은 순 하위 10개
+# 변동률 낮은 순 하위 10개 (인구 감소 지역)
 bottom10 = (
-    df_sigungu.sort_values(by='고령화율', ascending=True)
-    .head(10)[['시도', '시군구', '총인구', '65세이상인구', '고령화율']]
+    df_sigungu.sort_values(by='변동률', ascending=True)
+    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
     .reset_index(drop=True)
 )
 
 with col1:
-    st.markdown("##### 🔴 고령화율 가장 높은 지역 TOP 10")
+    st.markdown("##### 🔵 인구 증가율 가장 높은 지역 TOP 10")
     st.dataframe(
         top10.style.format({
-            '총인구': '{:,}명',
-            '65세이상인구': '{:,}명',
-            '고령화율': '{:.1f}%'
+            '인구_2015': '{:,}명',
+            '인구_최신': '{:,}명',
+            '인구증감': '{:+,}명',
+            '변동률': '{:+.1f}%'
         }),
         use_container_width=True
     )
 
 with col2:
-    st.markdown("##### 🔵 고령화율 가장 낮은 지역 TOP 10")
+    st.markdown("##### 🔴 인구 감소율 가장 높은 지역 TOP 10")
     st.dataframe(
         bottom10.style.format({
-            '총인구': '{:,}명',
-            '65세이상인구': '{:,}명',
-            '고령화율': '{:.1f}%'
+            '인구_2015': '{:,}명',
+            '인구_최신': '{:,}명',
+            '인구증감': '{:+,}명',
+            '변동률': '{:+.1f}%'
         }),
         use_container_width=True
     )
