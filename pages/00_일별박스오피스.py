@@ -10,20 +10,29 @@ st.title("🎬 박스오피스 & 주말 vs 평일 흥행 비교 대시보드")
 KOBIS_KEY = st.secrets["KOBIS_KEY"]
 
 # ---------------------------------------------------------
-# 1. 날짜 계산 (어제, 지난 주말 일요일, 지난 평일 목요일)
+# 1. 날짜 설정 (달력 선택 기능 추가)
 # ---------------------------------------------------------
 now = datetime.now(ZoneInfo("Asia/Seoul"))
-yesterday = now - timedelta(days=1)
-target_dt_yesterday = yesterday.strftime("%Y%m%d")
+yesterday_dt = (now - timedelta(days=1)).date()
 
-# 지난주 일요일 계산 (weekGb="0"은 금~일 주말 박스오피스)
-days_since_sunday = (yesterday.weekday() + 1) % 7
-last_sunday = yesterday - timedelta(days=days_since_sunday)
+# 사이드바에서 날짜 선택 (최대 어제 날짜까지 선택 가능)
+selected_date = st.sidebar.date_input(
+    "📅 박스오피스 날짜 선택",
+    value=yesterday_dt,
+    max_value=yesterday_dt,
+    help="오늘 날짜 이후는 집계 전이므로 어제 날짜까지만 선택 가능합니다."
+)
+
+target_dt_selected = selected_date.strftime("%Y%m%d")
+
+# 선택한 날짜 기준 주말(일요일) 및 평일(목요일) 계산
+selected_datetime = datetime.combine(selected_date, datetime.min.time())
+days_since_sunday = (selected_datetime.weekday() + 1) % 7
+last_sunday = selected_datetime - timedelta(days=days_since_sunday)
 target_dt_weekend = last_sunday.strftime("%Y%m%d")
 
-# 지난주 목요일 계산 (weekGb="1"은 월~목 주중 박스오피스)
-days_since_thursday = (yesterday.weekday() - 3) % 7
-last_thursday = yesterday - timedelta(days=days_since_thursday)
+days_since_thursday = (selected_datetime.weekday() - 3) % 7
+last_thursday = selected_datetime - timedelta(days=days_since_thursday)
 target_dt_weekday = last_thursday.strftime("%Y%m%d")
 
 # ---------------------------------------------------------
@@ -51,7 +60,7 @@ def fetch_movie_detail(movie_code):
         return data["movieInfoResult"]["movieInfo"]
     return None
 
-# 영화 상세정보 대화상자(팝업) 띄우기 함수
+# 영화 상세정보 대화상자(팝업)
 @st.dialog("🎬 영화 상세 정보")
 def show_movie_detail_dialog(movie_cd):
     with st.spinner("영화 정보를 가져오는 중..."):
@@ -100,22 +109,15 @@ def show_movie_detail_dialog(movie_cd):
 # ---------------------------------------------------------
 # 3. 데이터 로딩
 # ---------------------------------------------------------
-# A. 어제 일별 박스오피스
+# A. 선택한 날짜 일별 박스오피스
 daily_url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
-daily_data, err = fetch_box_office(daily_url, {"key": KOBIS_KEY, "targetDt": target_dt_yesterday})
+daily_data, err = fetch_box_office(daily_url, {"key": KOBIS_KEY, "targetDt": target_dt_selected})
 
 if err:
     st.error(err)
     st.stop()
 
 daily_list = daily_data.get("boxOfficeResult", {}).get("dailyBoxOfficeList", [])
-if not daily_list:
-    st.warning("어제 박스오피스 데이터가 없습니다.")
-    st.stop()
-
-df_daily = pd.DataFrame(daily_list)
-for col in ["rank", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
-    df_daily[col] = pd.to_numeric(df_daily[col])
 
 # B. 주말(금~일) & 평일(월~목) 박스오피스
 weekly_url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchWeeklyBoxOfficeList.json"
@@ -136,59 +138,88 @@ for df_temp in [df_weekend, df_weekday]:
 # ---------------------------------------------------------
 # 4. 화면 레이아웃 (탭 구성)
 # ---------------------------------------------------------
-tab1, tab2 = st.tabs(["📌 어제의 박스오피스", "⚔️ 주말 vs 평일 흥행 비교"])
+tab1, tab2 = st.tabs(["📌 일별 박스오피스", "⚔️ 주말 vs 평일 흥행 비교"])
 
 # ---------------------------------------------------------
-# TAB 1: 어제 박스오피스 + 영화 상세팝업 기능
+# TAB 1: 선택한 날짜 박스오피스
 # ---------------------------------------------------------
 with tab1:
-    st.caption(f"조회 기준일: {yesterday.strftime('%Y-%m-%d')}")
+    st.caption(f"조회 기준일: {selected_date.strftime('%Y년 %m월 %d일')}")
     
-    # 1위 영화 지표 카드
-    top = df_daily.sort_values("rank").iloc[0]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("어제 1위", top["movieNm"])
-    c2.metric("어제 관객수", f"{top['audiCnt']:,}명")
-    c3.metric("누적 관객", f"{top['audiAcc']:,}명")
+    # 예외 처리: 데이터가 비어 있는 경우
+    if not daily_list:
+        st.warning("그날은 아직 집계 전입니다.")
+    else:
+        df_daily = pd.DataFrame(daily_list)
+        for col in ["rank", "rankInten", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
+            df_daily[col] = pd.to_numeric(df_daily[col])
 
-    st.subheader("📋 일별 박스오피스 TOP 10")
-    st.info("💡 영화명을 선택하거나 목록에서 클릭하여 상세 정보를 확인할 수 있습니다.")
+        # 1위 영화 지표 카드
+        top = df_daily.sort_values("rank").iloc[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("1위 영화", top["movieNm"])
+        c2.metric("당일 관객수", f"{top['audiCnt']:,}명")
+        c3.metric("누적 관객", f"{top['audiAcc']:,}명")
 
-    # 표 정리
-    table_daily = df_daily[["rank", "movieNm", "openDt", "audiCnt", "audiAcc", "scrnCnt", "movieCd"]].copy()
-    table_daily.columns = ["순위", "영화명", "개봉일", "관객수", "누적관객", "스크린수", "movieCd"]
-    table_daily = table_daily.sort_values("순위").reset_index(drop=True)
+        st.subheader("📋 박스오피스 TOP 10")
+        st.info("💡 영화명을 선택하여 상세 정보를 볼 수 있습니다. (🏆: 누적관객 100만 이상)")
 
-    # 영화 상세 팝업 선택 드롭다운/셀렉트박스
-    movie_options = dict(zip(table_daily["영화명"], table_daily["movieCd"]))
-    selected_movie_nm = st.selectbox("🔍 상세정보를 조회할 영화를 선택하세요:", ["선택하세요..."] + list(movie_options.keys()))
+        # 가공 1: 순위 증감 표현 (rankInten / rankOldAndNew)
+        def format_rank_inten(row):
+            inten = row["rankInten"]
+            if row.get("rankOldAndNew") == "NEW":
+                return "🆕 NEW"
+            if inten > 0:
+                return f"🔺 +{inten}"
+            elif inten < 0:
+                return f"🔻 {inten}"
+            else:
+                return "➖ 0"
 
-    if selected_movie_nm != "선택하세요...":
-        if st.button(f"'{selected_movie_nm}' 상세정보 보기"):
-            show_movie_detail_dialog(movie_options[selected_movie_nm])
+        df_daily["순위변동"] = df_daily.apply(format_rank_inten, axis=1)
 
-    # 박스오피스 테이블 출력 (movieCd 숨김)
-    st.dataframe(
-        table_daily.drop(columns=["movieCd"]), 
-        use_container_width=True
-    )
+        # 가공 2: 누적관객 100만 명 이상 🏆 이모지 표시
+        def format_movie_title(row):
+            title = row["movieNm"]
+            if row["audiAcc"] >= 1_000_000:
+                return f"{title} 🏆"
+            return title
 
-    st.subheader("📈 관객수 상위 5편")
-    top5_daily = table_daily.sort_values("관객수", ascending=False).head(5)
-    st.bar_chart(top5_daily.set_index("영화명")["관객수"])
+        df_daily["표시영화명"] = df_daily.apply(format_movie_title, axis=1)
+
+        # 표 정리
+        table_daily = df_daily[["rank", "순위변동", "표시영화명", "openDt", "audiCnt", "audiAcc", "scrnCnt", "movieCd", "movieNm"]].copy()
+        table_daily.columns = ["순위", "순위변동", "영화명", "개봉일", "관객수", "누적관객", "스크린수", "movieCd", "originalMovieNm"]
+        table_daily = table_daily.sort_values("순위").reset_index(drop=True)
+
+        # 영화 상세 팝업 선택 드롭다운 (원본 영화명 표시)
+        movie_options = dict(zip(table_daily["originalMovieNm"], table_daily["movieCd"]))
+        selected_movie_nm = st.selectbox("🔍 상세정보를 조회할 영화를 선택하세요:", ["선택하세요..."] + list(movie_options.keys()))
+
+        if selected_movie_nm != "선택하세요...":
+            if st.button(f"'{selected_movie_nm}' 상세정보 보기"):
+                show_movie_detail_dialog(movie_options[selected_movie_nm])
+
+        # 박스오피스 테이블 출력 (내부 파라미터 컬럼 숨김)
+        st.dataframe(
+            table_daily.drop(columns=["movieCd", "originalMovieNm"]), 
+            use_container_width=True
+        )
+
+        st.subheader("📈 관객수 상위 5편")
+        top5_daily = table_daily.sort_values("관객수", ascending=False).head(5)
+        st.bar_chart(top5_daily.set_index("영화명")["관객수"])
 
 # ---------------------------------------------------------
 # TAB 2: 주말 vs 평일 흥행 비교
 # ---------------------------------------------------------
 with tab2:
-    # 마크다운 취소선 방지를 위해 물결표(~) 대신 범위를 명확히 표기
     st.subheader("⚔️ 최근 주말(금요일 - 일요일) vs 평일(월요일 - 목요일) 흥행 분석")
     st.caption(f"비교 대상 기준: 주말({last_sunday.strftime('%Y-%m-%d')} 주차) / 평일({last_thursday.strftime('%Y-%m-%d')} 주차)")
 
     if df_weekend.empty or df_weekday.empty:
         st.warning("주말 또는 평일 데이터를 불러오지 못했습니다.")
     else:
-        # 요약 지표 비교
         weekend_top = df_weekend.sort_values("rank").iloc[0]
         weekday_top = df_weekday.sort_values("rank").iloc[0]
 
@@ -200,7 +231,6 @@ with tab2:
 
         st.divider()
 
-        # 데이터 병합을 통한 주말 vs 평일 비교 표 생성
         df_we = df_weekend[["movieNm", "rank", "audiCnt", "scrnCnt"]].rename(
             columns={"rank": "주말순위", "audiCnt": "주말관객수", "scrnCnt": "주말스크린수"}
         )
