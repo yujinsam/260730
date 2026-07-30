@@ -16,19 +16,18 @@ now = datetime.now(ZoneInfo("Asia/Seoul"))
 yesterday = now - timedelta(days=1)
 target_dt_yesterday = yesterday.strftime("%Y%m%d")
 
-# 지난주 일요일 계산 (weekGb="0"은 금~일 주말 박스오피스 조회용)
-# weekday(): 월=0, 화=1, 수=2, 목=3, 금=4, 토=5, 일=6
+# 지난주 일요일 계산 (weekGb="0"은 금~일 주말 박스오피스)
 days_since_sunday = (yesterday.weekday() + 1) % 7
 last_sunday = yesterday - timedelta(days=days_since_sunday)
 target_dt_weekend = last_sunday.strftime("%Y%m%d")
 
-# 지난주 목요일 계산 (weekGb="1"은 월~목 주중 박스오피스 조회용)
+# 지난주 목요일 계산 (weekGb="1"은 월~목 주중 박스오피스)
 days_since_thursday = (yesterday.weekday() - 3) % 7
 last_thursday = yesterday - timedelta(days=days_since_thursday)
 target_dt_weekday = last_thursday.strftime("%Y%m%d")
 
 # ---------------------------------------------------------
-# 2. API 호출 공통 함수 (캐싱 적용으로 속도 개선)
+# 2. API 호출 공통 함수 (캐싱 적용)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_box_office(url, params):
@@ -42,6 +41,61 @@ def fetch_box_office(url, params):
         return data, None
     except Exception as e:
         return None, str(e)
+
+# 영화 상세정보 API 연동 함수
+@st.cache_data(ttl=86400)
+def fetch_movie_detail(movie_code):
+    url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMovieInfo.json"
+    data, err = fetch_box_office(url, {"key": KOBIS_KEY, "movieCd": movie_code})
+    if data and "movieInfoResult" in data:
+        return data["movieInfoResult"]["movieInfo"]
+    return None
+
+# 영화 상세정보 대화상자(팝업) 띄우기 함수
+@st.dialog("🎬 영화 상세 정보")
+def show_movie_detail_dialog(movie_cd):
+    with st.spinner("영화 정보를 가져오는 중..."):
+        info = fetch_movie_detail(movie_cd)
+    
+    if not info:
+        st.error("상세 정보를 불러올 수 없습니다.")
+        return
+
+    st.subheader(info.get("movieNm", "영화명 정보 없음"))
+    if info.get("movieNmEn"):
+        st.caption(f"영문명: {info.get('movieNmEn')}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**상영 시간:** {info.get('showTm', '-')}분")
+        st.markdown(f"**개봉일:** {info.get('openDt', '-')}")
+        genres = ", ".join([g["genreNm"] for g in info.get("genres", [])])
+        st.markdown(f"**장르:** {genres if genres else '-'}")
+        
+    with col2:
+        nations = ", ".join([n["nationNm"] for n in info.get("nations", [])])
+        st.markdown(f"**제작 국가:** {nations if nations else '-'}")
+        audits = ", ".join([a["watchGradeNm"] for a in info.get("audits", [])])
+        st.markdown(f"**관람 등급:** {audits if audits else '-'}")
+        directors = ", ".join([d["peopleNm"] for d in info.get("directors", [])])
+        st.markdown(f"**감독:** {directors if directors else '-'}")
+
+    st.divider()
+    st.markdown("##### 🎭 주요 출연진")
+    actors = info.get("actors", [])
+    if actors:
+        actor_names = [f"{a['peopleNm']}" + (f" ({a['cast']} 역)" if a.get('cast') else "") for a in actors[:10]]
+        st.write(", ".join(actor_names))
+        if len(actors) > 10:
+            st.caption(f"외 {len(actors) - 10}명")
+    else:
+        st.write("출연진 정보가 없습니다.")
+
+    st.divider()
+    companys = info.get("companys", [])
+    if companys:
+        comp_list = [f"{c['companyNm']} ({c['companyPartNm']})" for c in companys[:5]]
+        st.caption("제작/배급사: " + ", ".join(comp_list))
 
 # ---------------------------------------------------------
 # 3. 데이터 로딩
@@ -65,10 +119,7 @@ for col in ["rank", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
 
 # B. 주말(금~일) & 평일(월~목) 박스오피스
 weekly_url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchWeeklyBoxOfficeList.json"
-
-# 주말 (weekGb: 0 = 주말, 1 = 주중, 2 = 주간)
 weekend_data, _ = fetch_box_office(weekly_url, {"key": KOBIS_KEY, "targetDt": target_dt_weekend, "weekGb": "0"})
-# 평일(주중)
 weekday_data, _ = fetch_box_office(weekly_url, {"key": KOBIS_KEY, "targetDt": target_dt_weekday, "weekGb": "1"})
 
 weekend_list = weekend_data.get("boxOfficeResult", {}).get("weeklyBoxOfficeList", []) if weekend_data else []
@@ -88,7 +139,7 @@ for df_temp in [df_weekend, df_weekday]:
 tab1, tab2 = st.tabs(["📌 어제의 박스오피스", "⚔️ 주말 vs 평일 흥행 비교"])
 
 # ---------------------------------------------------------
-# TAB 1: 어제 박스오피스 (기존 작성한 기능)
+# TAB 1: 어제 박스오피스 + 영화 상세팝업 기능
 # ---------------------------------------------------------
 with tab1:
     st.caption(f"조회 기준일: {yesterday.strftime('%Y-%m-%d')}")
@@ -100,23 +151,38 @@ with tab1:
     c2.metric("어제 관객수", f"{top['audiCnt']:,}명")
     c3.metric("누적 관객", f"{top['audiAcc']:,}명")
 
+    st.subheader("📋 일별 박스오피스 TOP 10")
+    st.info("💡 영화명을 선택하거나 목록에서 클릭하여 상세 정보를 확인할 수 있습니다.")
+
     # 표 정리
-    table_daily = df_daily[["rank", "movieNm", "openDt", "audiCnt", "audiAcc", "scrnCnt"]].copy()
-    table_daily.columns = ["순위", "영화명", "개봉일", "관객수", "누적관객", "스크린수"]
+    table_daily = df_daily[["rank", "movieNm", "openDt", "audiCnt", "audiAcc", "scrnCnt", "movieCd"]].copy()
+    table_daily.columns = ["순위", "영화명", "개봉일", "관객수", "누적관객", "스크린수", "movieCd"]
     table_daily = table_daily.sort_values("순위").reset_index(drop=True)
 
-    st.subheader("📋 일별 박스오피스 TOP 10")
-    st.dataframe(table_daily, use_container_width=True)
+    # 영화 상세 팝업 선택 드롭다운/셀렉트박스
+    movie_options = dict(zip(table_daily["영화명"], table_daily["movieCd"]))
+    selected_movie_nm = st.selectbox("🔍 상세정보를 조회할 영화를 선택하세요:", ["선택하세요..."] + list(movie_options.keys()))
+
+    if selected_movie_nm != "선택하세요...":
+        if st.button(f"'{selected_movie_nm}' 상세정보 보기"):
+            show_movie_detail_dialog(movie_options[selected_movie_nm])
+
+    # 박스오피스 테이블 출력 (movieCd 숨김)
+    st.dataframe(
+        table_daily.drop(columns=["movieCd"]), 
+        use_container_width=True
+    )
 
     st.subheader("📈 관객수 상위 5편")
     top5_daily = table_daily.sort_values("관객수", ascending=False).head(5)
     st.bar_chart(top5_daily.set_index("영화명")["관객수"])
 
 # ---------------------------------------------------------
-# TAB 2: 주말 vs 평일 흥행 비교 (새로 추가된 기능)
+# TAB 2: 주말 vs 평일 흥행 비교
 # ---------------------------------------------------------
 with tab2:
-    st.subheader("⚔️ 최근 주말(금~일) vs 평일(월~목) 흥행 분석")
+    # 마크다운 취소선 방지를 위해 물결표(~) 대신 범위를 명확히 표기
+    st.subheader("⚔️ 최근 주말(금요일 - 일요일) vs 평일(월요일 - 목요일) 흥행 분석")
     st.caption(f"비교 대상 기준: 주말({last_sunday.strftime('%Y-%m-%d')} 주차) / 평일({last_thursday.strftime('%Y-%m-%d')} 주차)")
 
     if df_weekend.empty or df_weekday.empty:
@@ -142,16 +208,11 @@ with tab2:
             columns={"rank": "평일순위", "audiCnt": "평일관객수", "scrnCnt": "평일스크린수"}
         )
 
-        # 영화명 기준으로 주말/평일 성적 합치기
         df_merged = pd.merge(df_we, df_wd, on="movieNm", how="outer").fillna(0)
-        
-        # 순위 변동 계산 (평일 순위 - 주말 순위: 양수면 주말에 순위 상승)
-        # 0점 처리된 영화는 순위 계산 시 직관적인 표시 처리
         df_merged["주말관객수"] = df_merged["주말관객수"].astype(int)
         df_merged["평일관객수"] = df_merged["평일관객수"].astype(int)
 
         st.write("##### 📊 주요 영화 주말/평일 관객수 비교 차트")
-        # 관객수 합계 기준 상위 7개 영화 시각화
         df_merged["총관객수"] = df_merged["주말관객수"] + df_merged["평일관객수"]
         top_movies = df_merged.sort_values("총관객수", ascending=False).head(7)
 
@@ -162,6 +223,5 @@ with tab2:
         display_df = df_merged[["movieNm", "주말순위", "주말관객수", "평일순위", "평일관객수"]].copy()
         display_df.columns = ["영화명", "주말 순위", "주말 관객수", "평일 순위", "평일 관객수"]
         
-        # 보기 깔끔하게 관객수 기준 정렬
         display_df = display_df.sort_values("주말 관객수", ascending=False).reset_index(drop=True)
         st.dataframe(display_df, use_container_width=True)
