@@ -36,7 +36,7 @@ def load_and_process_change_data():
     max_year = df['연도'].max()
     
     # -------------------------------------------------------------------------
-    # [데이터 정제] 행정구역 명칭 및 코드 최신화 (강원, 전북 특별자치도 통합)
+    # [데이터 정제] 행정구역 명칭, 코드 최신화 및 결측치 방어
     # -------------------------------------------------------------------------
     # 1. 시도 명칭 변경
     df['시도'] = df['시도'].replace({
@@ -44,10 +44,13 @@ def load_and_process_change_data():
         '전라북도': '전북특별자치도'
     })
     
-    # 2. 앞 5자리 시군구 코드 추출
+    # 2. 결측치(NaN) 방어: 세종시처럼 시군구가 없는 단일 지자체는 groupby에서 누락되지 않도록 시도 이름으로 채움
+    df['시군구'] = df['시군구'].fillna(df['시도'])
+    
+    # 3. 앞 5자리 시군구 코드 추출
     df['sigungu_code'] = df['코드'].str[:5]
     
-    # 3. 과거 시도 코드(강원도: 42, 전라북도: 45)를 최신 코드(강원: 51, 전북: 52)로 변환
+    # 4. 과거 시도 코드(강원도: 42, 전라북도: 45)를 최신 코드(강원: 51, 전북: 52)로 변환
     df['sigungu_code'] = df['sigungu_code'].apply(
         lambda x: '51' + x[2:] if x.startswith('42') else ('52' + x[2:] if x.startswith('45') else x)
     )
@@ -72,7 +75,7 @@ def load_and_process_change_data():
     pivoted.columns.name = None
     pivoted = pivoted.rename(columns={min_year: '인구_2015', max_year: '인구_최신'})
     
-    # 결측치를 0으로 채워 행 삭제 방지
+    # 결측치를 0으로 채워 행 삭제 방지 (신설 및 통합 지역 대응)
     pivoted['인구_2015'] = pivoted['인구_2015'].fillna(0)
     pivoted['인구_최신'] = pivoted['인구_최신'].fillna(0)
     
@@ -195,20 +198,18 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 4. (기존) 비율(%) 기준 상위/하위 10개 지역 표 표시
+# 4. 비율(%) 기준 상위/하위 10개 지역 표 표시
 # -----------------------------------------------------------------------------
 st.subheader("📊 인구 변동률(%) 극단 지역 비교")
 
 col1, col2 = st.columns(2)
 
-# 변동률 높은 순 상위 10개
 top10_rate = (
     df_sigungu.sort_values(by='변동률', ascending=False)
     .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
     .reset_index(drop=True)
 )
 
-# 변동률 낮은 순 하위 10개
 bottom10_rate = (
     df_sigungu.sort_values(by='변동률', ascending=True)
     .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
@@ -231,53 +232,6 @@ with col2:
     st.markdown("##### 🔴 인구 감소율(%) 가장 높은 지역 TOP 10")
     st.dataframe(
         bottom10_rate.style.format({
-            '인구_2015': '{:,}명',
-            '인구_최신': '{:,}명',
-            '인구증감': '{:+,}명',
-            '변동률': '{:+.1f}%'
-        }),
-        use_container_width=True
-    )
-
-st.markdown("---")
-
-# -----------------------------------------------------------------------------
-# 5. (신규) 실제 증감수(명) 기준 상위/하위 10개 지역 표 표시
-# -----------------------------------------------------------------------------
-st.subheader("👥 인구 증감수(명) 극단 지역 비교")
-
-col3, col4 = st.columns(2)
-
-# 실제 인구가 가장 많이 늘어난 곳 (인구증감 최상위 10개)
-top10_amount = (
-    df_sigungu.sort_values(by='인구증감', ascending=False)
-    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
-    .reset_index(drop=True)
-)
-
-# 실제 인구가 가장 많이 줄어든 곳 (인구증감 최하위 10개)
-bottom10_amount = (
-    df_sigungu.sort_values(by='인구증감', ascending=True)
-    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
-    .reset_index(drop=True)
-)
-
-with col3:
-    st.markdown("##### 🔵 인구 증가 수(명) 가장 많은 지역 TOP 10")
-    st.dataframe(
-        top10_amount.style.format({
-            '인구_2015': '{:,}명',
-            '인구_최신': '{:,}명',
-            '인구증감': '{:+,}명',
-            '변동률': '{:+.1f}%'
-        }),
-        use_container_width=True
-    )
-
-with col4:
-    st.markdown("##### 🔴 인구 감소 수(명) 가장 많은 지역 TOP 10")
-    st.dataframe(
-        bottom10_amount.style.format({
             '인구_2015': '{:,}명',
             '인구_최신': '{:,}명',
             '인구증감': '{:+,}명',
