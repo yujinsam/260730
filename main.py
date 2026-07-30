@@ -8,7 +8,7 @@ import requests
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="전국 시군구 고령화 지도",
-    page_layout="wide"
+    layout="wide"       # ⭕ layout 으로 변경
 )
 
 st.title("🗺️ 전국 시군구 고령화율 지도")
