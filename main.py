@@ -35,8 +35,25 @@ def load_and_process_change_data():
     min_year = df['연도'].min()
     max_year = df['연도'].max()
     
+    # -------------------------------------------------------------------------
+    # [데이터 정제] 행정구역 명칭 및 코드 최신화 (강원, 전북 특별자치도 통합)
+    # -------------------------------------------------------------------------
+    # 1. 시도 명칭 변경
+    df['시도'] = df['시도'].replace({
+        '강원도': '강원특별자치도',
+        '전라북도': '전북특별자치도'
+    })
+    
+    # 2. 앞 5자리 시군구 코드 추출
     df['sigungu_code'] = df['코드'].str[:5]
     
+    # 3. 과거 시도 코드(강원도: 42, 전라북도: 45)를 최신 코드(강원: 51, 전북: 52)로 변환
+    df['sigungu_code'] = df['sigungu_code'].apply(
+        lambda x: '51' + x[2:] if x.startswith('42') else ('52' + x[2:] if x.startswith('45') else x)
+    )
+    # -------------------------------------------------------------------------
+    
+    # 전체 인구 계산
     total_cols = [c for c in df.columns if c.startswith('계_')]
     df['총인구'] = df[total_cols].sum(axis=1)
     
@@ -45,7 +62,7 @@ def load_and_process_change_data():
         ['sigungu_code', '시도', '시군구', '연도'], as_index=False
     )['총인구'].sum()
     
-    # 연도별 피벗
+    # 연도별 피벗 (2015년, 최신년도 열 생성)
     pivoted = grouped.pivot(
         index=['sigungu_code', '시도', '시군구'], 
         columns='연도', 
@@ -55,7 +72,7 @@ def load_and_process_change_data():
     pivoted.columns.name = None
     pivoted = pivoted.rename(columns={min_year: '인구_2015', max_year: '인구_최신'})
     
-    # 결측치를 0으로 채워 행이 삭제되지 않도록 처리 (누락 지역 방지)
+    # 결측치를 0으로 채워 행 삭제 방지
     pivoted['인구_2015'] = pivoted['인구_2015'].fillna(0)
     pivoted['인구_최신'] = pivoted['인구_최신'].fillna(0)
     
@@ -86,6 +103,15 @@ def load_and_process_change_data():
 # 데이터 로딩 실행
 with st.spinner("데이터를 분석 중입니다..."):
     geojson_data = load_geojson()
+    
+    # GeoJSON 내부의 구형 코드(42, 45)도 신형(51, 52)으로 업데이트하여 맵핑이 완벽히 되도록 처리
+    for feature in geojson_data['features']:
+        code = feature['properties']['코드']
+        if code.startswith('42'):
+            feature['properties']['코드'] = '51' + code[2:]
+        elif code.startswith('45'):
+            feature['properties']['코드'] = '52' + code[2:]
+            
     df_sigungu, min_year, max_year = load_and_process_change_data()
 
 # 사이드바 안내
