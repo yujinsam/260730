@@ -195,30 +195,30 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 4. 지도 하단 상위/하위 10개 지역 표 표시
+# 4. (기존) 비율(%) 기준 상위/하위 10개 지역 표 표시
 # -----------------------------------------------------------------------------
-st.subheader("📊 인구 변동률 극단 지역 비교")
+st.subheader("📊 인구 변동률(%) 극단 지역 비교")
 
 col1, col2 = st.columns(2)
 
-# 변동률 높은 순 상위 10개 (인구 증가 지역)
-top10 = (
+# 변동률 높은 순 상위 10개
+top10_rate = (
     df_sigungu.sort_values(by='변동률', ascending=False)
     .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
     .reset_index(drop=True)
 )
 
-# 변동률 낮은 순 하위 10개 (인구 감소 지역)
-bottom10 = (
+# 변동률 낮은 순 하위 10개
+bottom10_rate = (
     df_sigungu.sort_values(by='변동률', ascending=True)
     .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
     .reset_index(drop=True)
 )
 
 with col1:
-    st.markdown("##### 🔵 인구 증가율 가장 높은 지역 TOP 10")
+    st.markdown("##### 🔵 인구 증가율(%) 가장 높은 지역 TOP 10")
     st.dataframe(
-        top10.style.format({
+        top10_rate.style.format({
             '인구_2015': '{:,}명',
             '인구_최신': '{:,}명',
             '인구증감': '{:+,}명',
@@ -228,9 +228,56 @@ with col1:
     )
 
 with col2:
-    st.markdown("##### 🔴 인구 감소율 가장 높은 지역 TOP 10")
+    st.markdown("##### 🔴 인구 감소율(%) 가장 높은 지역 TOP 10")
     st.dataframe(
-        bottom10.style.format({
+        bottom10_rate.style.format({
+            '인구_2015': '{:,}명',
+            '인구_최신': '{:,}명',
+            '인구증감': '{:+,}명',
+            '변동률': '{:+.1f}%'
+        }),
+        use_container_width=True
+    )
+
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 5. (신규) 실제 증감수(명) 기준 상위/하위 10개 지역 표 표시
+# -----------------------------------------------------------------------------
+st.subheader("👥 인구 증감수(명) 극단 지역 비교")
+
+col3, col4 = st.columns(2)
+
+# 실제 인구가 가장 많이 늘어난 곳 (인구증감 최상위 10개)
+top10_amount = (
+    df_sigungu.sort_values(by='인구증감', ascending=False)
+    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
+    .reset_index(drop=True)
+)
+
+# 실제 인구가 가장 많이 줄어든 곳 (인구증감 최하위 10개)
+bottom10_amount = (
+    df_sigungu.sort_values(by='인구증감', ascending=True)
+    .head(10)[['시도', '시군구', '인구_2015', '인구_최신', '인구증감', '변동률']]
+    .reset_index(drop=True)
+)
+
+with col3:
+    st.markdown("##### 🔵 인구 증가 수(명) 가장 많은 지역 TOP 10")
+    st.dataframe(
+        top10_amount.style.format({
+            '인구_2015': '{:,}명',
+            '인구_최신': '{:,}명',
+            '인구증감': '{:+,}명',
+            '변동률': '{:+.1f}%'
+        }),
+        use_container_width=True
+    )
+
+with col4:
+    st.markdown("##### 🔴 인구 감소 수(명) 가장 많은 지역 TOP 10")
+    st.dataframe(
+        bottom10_amount.style.format({
             '인구_2015': '{:,}명',
             '인구_최신': '{:,}명',
             '인구증감': '{:+,}명',
