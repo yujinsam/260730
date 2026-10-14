@@ -147,7 +147,7 @@ category_order = [
     '+15% 이상 (급증)'
 ]
 
-fig = px.choropleth_mapbox(
+fig = px.choropleth_map(
     df_sigungu,
     geojson=geojson_data,
     locations='sigungu_code',         # 데이터의 시군구 코드
@@ -157,7 +157,7 @@ fig = px.choropleth_mapbox(
     category_orders={'변동단계': category_order},
     center={"lat": 35.9, "lon": 127.8}, # 대한민국 중심 좌표
     zoom=6.2,
-    mapbox_style="white-bg",          # 배경 지도 타일 없이 경계선만 표시
+    map_style="white-bg",          # 배경 지도 타일 없이 경계선만 표시
     hover_name='시군구',              # 툴팁 제목
     hover_data={
         '시도': True,
